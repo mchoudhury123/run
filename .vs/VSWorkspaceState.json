@@ -1,0 +1,18 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\ios",
+    "\\ios\\Runner",
+    "\\ios\\Runner\\Assets.xcassets",
+    "\\ios\\Runner\\Assets.xcassets\\AppIcon.appiconset",
+    "\\macos",
+    "\\macos\\Runner.xcodeproj",
+    "\\macos\\Runner.xcodeproj\\project.xcworkspace",
+    "\\macos\\Runner.xcodeproj\\project.xcworkspace\\xcshareddata",
+    "\\macos\\Runner.xcodeproj\\xcshareddata",
+    "\\macos\\Runner.xcodeproj\\xcshareddata\\xcschemes",
+    "\\test"
+  ],
+  "SelectedNode": "\\macos\\Runner.xcodeproj\\xcshareddata\\xcschemes\\Runner.xcscheme",
+  "PreviewInSolutionExplorer": false
+}
