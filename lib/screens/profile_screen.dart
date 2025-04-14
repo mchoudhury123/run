@@ -17,12 +17,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isStravaConnected = false;
   bool _isConnecting = false;
   late StravaService _stravaService;
+  bool _isLoading = false;
+  String? _photoUrl;
   String _displayName = 'User';
 
   @override
   void initState() {
     super.initState();
     _initializeServices();
+    _initializeUserData();
     _loadUserData();
   }
 
@@ -82,6 +85,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
           _displayName = updatedUser!.displayName!;
         });
       }
+    }
+  }
+
+  Future<void> _initializeUserData() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      setState(() {
+        _displayName = user.displayName ?? 'User';
+        _photoUrl = user.photoURL;
+      });
     }
   }
 
@@ -183,6 +196,60 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Widget _buildProfileImage() {
+    return Container(
+      width: 100,
+      height: 100,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white,
+          width: 3,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.3),
+            blurRadius: 8,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: ClipOval(
+        child: _photoUrl != null
+            ? Image.network(
+                _photoUrl!,
+                fit: BoxFit.cover,
+                loadingBuilder: (context, child, loadingProgress) {
+                  if (loadingProgress == null) return child;
+                  return Center(
+                    child: CircularProgressIndicator(
+                      value: loadingProgress.expectedTotalBytes != null
+                          ? loadingProgress.cumulativeBytesLoaded /
+                              loadingProgress.expectedTotalBytes!
+                          : null,
+                    ),
+                  );
+                },
+                errorBuilder: (context, error, stackTrace) => Icon(
+                  Icons.person,
+                  size: 50,
+                  color: AppColors.primaryBlue,
+                ),
+              )
+            : Container(
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade100,
+                ),
+                child: Icon(
+                  Icons.person,
+                  size: 50,
+                  color: AppColors.primaryBlue,
+                ),
+              ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -211,7 +278,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             padding: const EdgeInsets.all(20.0),
             child: Column(
               children: [
-                // Profile Header Section
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -222,76 +288,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Profile Picture
-                      Stack(
-                        children: [
-                          Container(
-                            width: 100,
-                            height: 100,
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              border: Border.all(
-                                color: Colors.white,
-                                width: 3,
-                              ),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.1),
-                                  blurRadius: 8,
-                                  spreadRadius: 2,
-                                ),
-                              ],
-                            ),
-                            child: ClipOval(
-                              child: FirebaseAuth.instance.currentUser?.photoURL != null
-                                ? Image.network(
-                                    FirebaseAuth.instance.currentUser!.photoURL!,
-                                    fit: BoxFit.cover,
-                                  )
-                                : Container(
-                                    width: 100,
-                                    height: 100,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      gradient: LinearGradient(
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                        colors: [
-                                          Colors.grey.shade300,
-                                          Colors.grey.shade200,
-                                        ],
-                                      ),
-                                    ),
-                                    child: Center(
-                                      child: Icon(
-                                        Icons.person,
-                                        size: 60,
-                                        color: Colors.grey.shade500,
-                                      ),
-                                    ),
-                                  ),
-                            ),
-                          ),
-                          Positioned(
-                            bottom: 0,
-                            right: 0,
-                            child: Container(
-                              padding: const EdgeInsets.all(4),
-                              decoration: BoxDecoration(
-                                color: AppColors.primaryBlue,
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(
-                                Icons.camera_alt,
-                                color: Colors.white,
-                                size: 18,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(width: 24),
-                      // User Info and Badges
+                      _buildProfileImage(),
+                      const SizedBox(width: 16),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,

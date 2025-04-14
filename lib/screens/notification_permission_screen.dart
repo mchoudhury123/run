@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'profile_photo_screen.dart';
 import '../main.dart';  // Import for AppColors
 import 'connect_health_screen.dart';
+import 'metric_selection_screen.dart';
 
 class NotificationPermissionScreen extends StatefulWidget {
   const NotificationPermissionScreen({super.key});
@@ -75,7 +76,10 @@ class _NotificationPermissionScreenState extends State<NotificationPermissionScr
           icon: const Icon(Icons.arrow_back),
           color: AppColors.textBlack,
           onPressed: () {
-            Navigator.pop(context);
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const MetricSelectionScreen()),
+            );
           },
         ),
       ),

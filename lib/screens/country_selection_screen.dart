@@ -1,44 +1,67 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:provider/provider.dart';
 import '../main.dart';
+import '../providers/currency_provider.dart';
 import 'connect_health_screen.dart';
-import 'user_details_screen.dart';
-import 'country_selection_screen.dart';
+import 'gender_selection_screen.dart';
 
-class GenderSelectionScreen extends StatefulWidget {
-  const GenderSelectionScreen({super.key});
+class CountrySelectionScreen extends StatefulWidget {
+  const CountrySelectionScreen({super.key});
 
   @override
-  State<GenderSelectionScreen> createState() => _GenderSelectionScreenState();
+  State<CountrySelectionScreen> createState() => _CountrySelectionScreenState();
 }
 
-class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
-  String? _selectedGender;
+class _CountrySelectionScreenState extends State<CountrySelectionScreen> {
+  String? _selectedCountry;
 
-  final List<Map<String, dynamic>> genderOptions = [
+  final List<Map<String, dynamic>> countryOptions = [
     {
-      'text': 'Female',
-      'icon': Icons.female_rounded,
-      'description': 'I identify as female',
+      'text': 'United States',
+      'icon': '🇺🇸',
+      'description': 'United States Dollar (USD)',
+      'currencySymbol': '\$',
+      'currencyCode': 'USD'
     },
     {
-      'text': 'Male',
-      'icon': Icons.male_rounded,
-      'description': 'I identify as male',
+      'text': 'United Kingdom',
+      'icon': '🇬🇧',
+      'description': 'British Pound Sterling (GBP)',
+      'currencySymbol': '£',
+      'currencyCode': 'GBP'
     },
     {
-      'text': 'Non-binary',
-      'icon': Icons.transgender_rounded,
-      'description': 'I identify as non-binary',
+      'text': 'European Union',
+      'icon': '🇪🇺',
+      'description': 'Euro (EUR)',
+      'currencySymbol': '€',
+      'currencyCode': 'EUR'
     },
     {
-      'text': 'Prefer not to say',
-      'icon': Icons.not_interested_rounded,
-      'description': 'I\'d rather not answer',
+      'text': 'Canada',
+      'icon': '🇨🇦',
+      'description': 'Canadian Dollar (CAD)',
+      'currencySymbol': 'C\$',
+      'currencyCode': 'CAD'
+    },
+    {
+      'text': 'Australia',
+      'icon': '🇦🇺',
+      'description': 'Australian Dollar (AUD)',
+      'currencySymbol': 'A\$',
+      'currencyCode': 'AUD'
+    },
+    {
+      'text': 'India',
+      'icon': '🇮🇳',
+      'description': 'Indian Rupee (INR)',
+      'currencySymbol': '₹',
+      'currencyCode': 'INR'
     },
   ];
 
-  bool get canContinue => _selectedGender != null;
+  bool get canContinue => _selectedCountry != null;
 
   @override
   Widget build(BuildContext context) {
@@ -51,7 +74,10 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
           icon: const Icon(Icons.arrow_back),
           color: AppColors.textBlack,
           onPressed: () {
-            Navigator.pop(context);
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const GenderSelectionScreen()),
+            );
           },
         ),
       ),
@@ -84,7 +110,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'How do you\nidentify yourself?',
+                          'Where are you\nlocated?',
                           style: TextStyle(
                             fontSize: 28,
                             fontWeight: FontWeight.bold,
@@ -94,7 +120,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Select the option that best describes you',
+                          'Select your country to set your preferred currency',
                           style: TextStyle(
                             fontSize: 16,
                             color: AppColors.textGrey,
@@ -111,12 +137,12 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Column(
-                  children: genderOptions.map((gender) {
-                    final isSelected = _selectedGender == gender['text'];
+                  children: countryOptions.map((country) {
+                    final isSelected = _selectedCountry == country['text'];
                     return GestureDetector(
                       onTap: () {
                         setState(() {
-                          _selectedGender = gender['text'];
+                          _selectedCountry = country['text'];
                         });
                       },
                       child: Container(
@@ -149,12 +175,9 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                                     : Colors.grey.shade50,
                                 borderRadius: BorderRadius.circular(12),
                               ),
-                              child: Icon(
-                                gender['icon'],
-                                size: 28,
-                                color: isSelected
-                                    ? AppColors.primaryBlue
-                                    : AppColors.textGrey,
+                              child: Text(
+                                country['icon'],
+                                style: const TextStyle(fontSize: 24),
                               ),
                             ),
                             const SizedBox(width: 16),
@@ -163,7 +186,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    gender['text'],
+                                    country['text'],
                                     style: TextStyle(
                                       fontSize: 16,
                                       color: AppColors.textBlack,
@@ -172,7 +195,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    gender['description'],
+                                    country['description'],
                                     style: TextStyle(
                                       fontSize: 14,
                                       color: AppColors.textGrey,
@@ -234,13 +257,27 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                 ),
                 child: ElevatedButton(
                   onPressed: canContinue
-                      ? () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const CountrySelectionScreen(),
-                            ),
+                      ? () async {
+                          // Save the selected currency
+                          final selectedOption = countryOptions.firstWhere(
+                            (country) => country['text'] == _selectedCountry
                           );
+                          
+                          // Update currency provider
+                          await Provider.of<CurrencyProvider>(context, listen: false)
+                              .setCurrency(
+                                selectedOption['currencyCode'],
+                                selectedOption['currencySymbol'],
+                              );
+
+                          if (mounted) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => const ConnectHealthScreen(),
+                              ),
+                            );
+                          }
                         }
                       : null,
                   style: ElevatedButton.styleFrom(

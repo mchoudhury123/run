@@ -9,7 +9,8 @@ import '../services/google_fit_service.dart';
 import '../services/strava_service.dart';
 import '../main.dart';
 import 'notification_permission_screen.dart';
-import 'gender_selection_screen.dart';
+import 'country_selection_screen.dart';
+import 'metric_selection_screen.dart';
 
 class ConnectHealthScreen extends StatefulWidget {
   const ConnectHealthScreen({super.key});
@@ -189,7 +190,7 @@ class _ConnectHealthScreenState extends State<ConnectHealthScreen> {
       if (success) {
         Navigator.push(
           context,
-          MaterialPageRoute(builder: (context) => const NotificationPermissionScreen()),
+          MaterialPageRoute(builder: (context) => const MetricSelectionScreen()),
         );
       } else {
         // Show error dialog
@@ -237,7 +238,10 @@ class _ConnectHealthScreenState extends State<ConnectHealthScreen> {
           icon: const Icon(Icons.arrow_back),
           color: AppColors.textBlack,
           onPressed: () {
-            Navigator.pop(context);
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const CountrySelectionScreen()),
+            );
           },
         ),
       ),
@@ -466,7 +470,7 @@ class _ConnectHealthScreenState extends State<ConnectHealthScreen> {
                     onPressed: () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (context) => const NotificationPermissionScreen()),
+                        MaterialPageRoute(builder: (context) => const MetricSelectionScreen()),
                       );
                     },
                     style: TextButton.styleFrom(

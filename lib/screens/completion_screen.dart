@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'home_screen.dart';
 import '../main.dart';  // Import for AppColors
+import 'profile_photo_screen.dart';  // Import for ProfilePhotoScreen
 
 class CompletionScreen extends StatelessWidget {
   const CompletionScreen({super.key});
@@ -9,6 +10,22 @@ class CompletionScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget mainContent = Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          color: AppColors.textBlack,
+          onPressed: () {
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const ProfilePhotoScreen(),
+              ),
+            );
+          },
+        ),
+      ),
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(

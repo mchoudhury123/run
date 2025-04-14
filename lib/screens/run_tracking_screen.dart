@@ -1,1309 +1,1438 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:timezone/timezone.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
+import '../providers/currency_provider.dart';
+import '../providers/metric_provider.dart';
 import '../services/strava_service.dart';
 import '../main.dart';
 import 'dart:convert';
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:firebase_auth/firebase_auth.dart';
+import 'run_intention_screen.dart';
+import 'dart:math';
+import 'package:intl/intl.dart';
+import 'charities_screen.dart';
+import 'home_screen.dart';
+import 'payment_screen.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
-class PaymentConfirmationScreen extends StatefulWidget {
-  final Map<String, dynamic> activity;
-  final Function(int selectedRate) onPaymentComplete;
-  final bool isMetric;
-  final double preSelectedRate;
-
-  const PaymentConfirmationScreen({
-    super.key,
-    required this.activity,
-    required this.onPaymentComplete,
-    this.isMetric = true,
-    this.preSelectedRate = 10.0,
-  });
-
-  @override
-  State<PaymentConfirmationScreen> createState() => _PaymentConfirmationScreenState();
-}
-
-class _PaymentConfirmationScreenState extends State<PaymentConfirmationScreen> {
-  late int _selectedRate;
-  String _selectedPaymentMethod = 'credit_card'; // Default payment method
-  List<Map<String, dynamic>> _availablePaymentMethods = [];
-
-  @override
-  void initState() {
-    super.initState();
-    // Initialize with the pre-selected rate from run intention
-    _selectedRate = widget.preSelectedRate.round();
-    _initPaymentMethods();
-  }
-
-  void _initPaymentMethods() {
-    // Default credit card option available on all platforms
-    _availablePaymentMethods = [
-      {
-        'id': 'credit_card',
-        'name': 'Credit Card',
-        'icon': Icons.credit_card,
-        'lastDigits': '4242',
-      },
-    ];
-
-    // Add platform-specific payment methods
-    if (!kIsWeb) {
-      if (Platform.isIOS || Platform.isMacOS) {
-        _availablePaymentMethods.add({
-          'id': 'apple_pay',
-          'name': 'Apple Pay',
-          'icon': Icons.apple,
-          'lastDigits': '',
-        });
-      } else if (Platform.isAndroid) {
-        // Check for Samsung device (this is a simplified check, you may need a more robust solution)
-        bool isSamsungDevice = false;
-        try {
-          // You would need a proper way to detect Samsung devices
-          // This is just a placeholder for demonstration
-          // In a real app, you might use a package like 'device_info_plus'
-          isSamsungDevice = Platform.operatingSystemVersion.toLowerCase().contains('samsung');
-        } catch (e) {
-          // Ignore errors
-        }
-
-        _availablePaymentMethods.add({
-          'id': 'google_pay',
-          'name': 'Google Pay',
-          'icon': Icons.g_mobiledata,
-          'lastDigits': '',
-        });
-
-        if (isSamsungDevice) {
-          _availablePaymentMethods.add({
-            'id': 'samsung_pay',
-            'name': 'Samsung Pay',
-            'icon': Icons.payments,
-            'lastDigits': '',
-          });
-        }
-      }
-    }
-
-    // Add "Add New Card" option
-    _availablePaymentMethods.add({
-      'id': 'add_new_card',
-      'name': 'Add New Card',
-      'icon': Icons.add_circle_outline,
-      'lastDigits': '',
-    });
-  }
-
-  void _handleAddNewCard() {
-    // Create a text controller to capture card details
-    final TextEditingController cardNumberController = TextEditingController();
-    final TextEditingController expiryController = TextEditingController();
-    final TextEditingController cvvController = TextEditingController();
-    final TextEditingController nameController = TextEditingController();
-
-    // In a real app, this would open a form to add a new card
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add New Card'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: cardNumberController,
-              decoration: const InputDecoration(
-                labelText: 'Card Number',
-                hintText: '1234 5678 9012 3456',
-              ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: expiryController,
-                    decoration: const InputDecoration(
-                      labelText: 'Expiry Date',
-                      hintText: 'MM/YY',
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: TextField(
-                    controller: cvvController,
-                    decoration: const InputDecoration(
-                      labelText: 'CVV',
-                      hintText: '123',
-                    ),
-                    keyboardType: TextInputType.number,
-                    obscureText: true,
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(
-                labelText: 'Cardholder Name',
-                hintText: 'John Doe',
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-            },
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              // Get the last 4 digits of the card
-              String lastFourDigits = '';
-              if (cardNumberController.text.length >= 4) {
-                lastFourDigits = cardNumberController.text.substring(cardNumberController.text.length - 4);
-              } else if (cardNumberController.text.isNotEmpty) {
-                lastFourDigits = cardNumberController.text;
-              } else {
-                lastFourDigits = '****'; // Default if no card number entered
-              }
-              
-              // Add the new card to available payment methods
-              setState(() {
-                // Generate a unique ID for the new card
-                final String newCardId = 'card_${DateTime.now().millisecondsSinceEpoch}';
-                
-                // Add the new card to the payment methods list (insert before "Add New Card" option)
-                _availablePaymentMethods.insert(_availablePaymentMethods.length - 1, {
-                  'id': newCardId,
-                  'name': nameController.text.isNotEmpty 
-                      ? '${nameController.text}\'s Card' 
-                      : 'Credit Card',
-                  'icon': Icons.credit_card,
-                  'lastDigits': lastFourDigits,
-                });
-                
-                // Select the new card
-                _selectedPaymentMethod = newCardId;
-              });
-              
-              Navigator.pop(context);
-              
-              // Show confirmation
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Card added successfully'),
-                ),
-              );
-            },
-            child: const Text('Add Card'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPaymentMethodCard(Map<String, dynamic> paymentMethod) {
-    final bool isSelected = _selectedPaymentMethod == paymentMethod['id'];
-    final bool isAddNewCard = paymentMethod['id'] == 'add_new_card';
-
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-        side: BorderSide(
-          color: isSelected ? AppColors.primaryBlue : Colors.grey.shade300,
-          width: isSelected ? 2 : 1,
-        ),
-      ),
-      child: InkWell(
-        onTap: () {
-          setState(() {
-            if (isAddNewCard) {
-              _handleAddNewCard();
-            } else {
-              _selectedPaymentMethod = paymentMethod['id'];
-            }
-          });
-        },
-        borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Row(
-            children: [
-              Icon(
-                paymentMethod['icon'],
-                color: isSelected || isAddNewCard ? AppColors.primaryBlue : Colors.grey.shade600,
-                size: 32,
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      paymentMethod['name'],
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
-                        color: isAddNewCard ? AppColors.primaryBlue : Colors.black87,
-                      ),
-                    ),
-                    if (paymentMethod['lastDigits'].isNotEmpty)
-                      Text(
-                        '**** **** **** ${paymentMethod['lastDigits']}',
-                        style: const TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              if (!isAddNewCard)
-                Radio(
-                  value: paymentMethod['id'],
-                  groupValue: _selectedPaymentMethod,
-                  onChanged: (value) {
-                    setState(() {
-                      _selectedPaymentMethod = value.toString();
-                    });
-                  },
-                  activeColor: AppColors.primaryBlue,
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final unitName = widget.isMetric ? 'kilometers' : 'miles';
-    final conversionFactor = widget.isMetric ? 1000.0 : 1609.34;
-    final distance = (widget.activity['distance'] as num).toDouble() / conversionFactor;
-    final donationAmount = (distance * _selectedRate).toStringAsFixed(2);
-    final activityName = widget.activity['name'] as String;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Donation Confirmation'),
-        backgroundColor: AppColors.primaryBlue,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Confirm Your Donation',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: AppColors.deepBlue,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              'For your recent Strava activity',
-              style: TextStyle(
-                fontSize: 16,
-                color: AppColors.textGrey,
-              ),
-            ),
-            const SizedBox(height: 20),
-            Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      activityName,
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textBlack,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${distance.toStringAsFixed(1)} $unitName',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: AppColors.textGrey,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    // Rate selection dropdown
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: AppColors.primaryBlue),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: DropdownButton<int>(
-                        value: _selectedRate,
-                        isExpanded: true,
-                        underline: Container(),
-                        items: [1, 2, 5, 10, 20].map((rate) {
-                          return DropdownMenuItem<int>(
-                            value: rate,
-                            child: Text('\$$rate per ${widget.isMetric ? 'kilometer' : 'mile'}'),
-                          );
-                        }).toList(),
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedRate = value!;
-                          });
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Donation Amount:',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: AppColors.textGrey,
-                          ),
-                        ),
-                        Text(
-                          '\$$donationAmount',
-                          style: TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.deepBlue,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Payment Method',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 16),
-            // Payment methods list
-            Expanded(
-              child: ListView.separated(
-                itemCount: _availablePaymentMethods.length,
-                separatorBuilder: (context, index) => const SizedBox(height: 8),
-                itemBuilder: (context, index) {
-                  return _buildPaymentMethodCard(_availablePaymentMethods[index]);
-                },
-              ),
-            ),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  // Simulate payment processing
-                  showDialog(
-                    context: context,
-                    barrierDismissible: false,
-                    builder: (context) => const AlertDialog(
-                      content: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          CircularProgressIndicator(),
-                          SizedBox(height: 16),
-                          Text('Processing payment...'),
-                        ],
-                      ),
-                    ),
-                  );
-
-                  // Simulate network delay
-                  Future.delayed(const Duration(seconds: 2), () {
-                    Navigator.pop(context); // Close progress dialog
-                    showDialog(
-                      context: context,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Payment Successful'),
-                        content: Text('Thank you for your donation of \$$donationAmount!'),
-                        actions: [
-                          TextButton(
-                            onPressed: () {
-                              Navigator.pop(context); // Close success dialog
-                              Navigator.pop(context); // Return to run screen
-                              widget.onPaymentComplete(_selectedRate); // Pass back the selected rate
-                            },
-                            child: const Text('OK'),
-                          ),
-                        ],
-                      ),
-                    );
-                  });
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryBlue,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text(
-                  'Confirm Payment',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class RunIntentionScreen extends StatefulWidget {
-  final Function(bool isMetric, double ratePerUnit) onIntentionSet;
-
-  const RunIntentionScreen({
-    super.key,
-    required this.onIntentionSet,
-  });
-
-  @override
-  State<RunIntentionScreen> createState() => _RunIntentionScreenState();
-}
-
-class _RunIntentionScreenState extends State<RunIntentionScreen> {
-  bool _isMetric = true; // true for km, false for miles
-  final List<double> _rates = [1.0, 2.0, 5.0, 10.0, 20.0];
-  double _selectedRate = 10.0; // Default rate
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Set Run Intention'),
-        backgroundColor: AppColors.primaryBlue,
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Plan Your Charitable Run',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
-                color: AppColors.deepBlue,
-              ),
-            ),
-            const SizedBox(height: 30),
-            Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Distance Unit',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => setState(() => _isMetric = true),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              decoration: BoxDecoration(
-                                color: _isMetric ? AppColors.primaryBlue : Colors.grey[200],
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                'Kilometers',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: _isMetric ? Colors.white : Colors.black,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: () => setState(() => _isMetric = false),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              decoration: BoxDecoration(
-                                color: !_isMetric ? AppColors.primaryBlue : Colors.grey[200],
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                'Miles',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: !_isMetric ? Colors.white : Colors.black,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 20),
-            Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Donation Rate',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: AppColors.primaryBlue),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: DropdownButton<double>(
-                        value: _selectedRate,
-                        isExpanded: true,
-                        underline: Container(),
-                        items: _rates.map((rate) {
-                          return DropdownMenuItem<double>(
-                            value: rate,
-                            child: Text('\$$rate per ${_isMetric ? 'kilometer' : 'mile'}'),
-                          );
-                        }).toList(),
-                        onChanged: (value) {
-                          setState(() {
-                            _selectedRate = value!;
-                          });
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const Spacer(),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: () {
-                  widget.onIntentionSet(_isMetric, _selectedRate);
-                  Navigator.pop(context);
-                },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryBlue,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text(
-                  'Start Run',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// Add notification service initialization
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
 
 class RunTrackingScreen extends StatefulWidget {
-  final Function(double totalDonations, double totalDistance)? onStatsUpdated;
-  
-  // Static fields to share data between screens
+  static _RunTrackingScreenState? currentState;
   static List<Map<String, dynamic>> donatedActivities = [];
   static Map<String, int> activityRates = {};
   static Function? onActivitiesUpdated;
+  static Function(double totalDonations, double totalDistance)? onStatsUpdated;
+  static DateTime? lastRunStartTime;
+  static bool isDevMode = true; // Add development mode flag
+
+  final Function(Map<String, dynamic>, int) onActivityDonated;
+  final Function() onPaymentComplete;
+  final int initialTabIndex;
 
   const RunTrackingScreen({
-    super.key,
-    this.onStatsUpdated,
-  });
+    Key? key,
+    required this.onActivityDonated,
+    required this.onPaymentComplete,
+    this.initialTabIndex = 0,
+  }) : super(key: key);
 
   @override
-  State<RunTrackingScreen> createState() => _RunTrackingScreenState();
+  _RunTrackingScreenState createState() => _RunTrackingScreenState();
 }
 
-class _RunTrackingScreenState extends State<RunTrackingScreen> {
-  bool _isLoading = true;
-  bool _hasActiveRun = false;
-  bool _isMetric = true;
-  double _ratePerUnit = 10.0;
-  late StravaService _stravaService;
+class _RunTrackingScreenState extends State<RunTrackingScreen> with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  late final StravaService _stravaService;
   List<Map<String, dynamic>> _activities = [];
   Set<String> _donatedActivityIds = {};
+  bool _isMetric = true;
+  bool _isLoading = false;
+  bool _isRefreshing = false;
+  bool _hasActiveRun = false;
+  double _selectedRate = 0.0;
+  int _ratePerUnit = 10;
   int _selectedIndex = 0;
-  Map<String, int> _activityRates = {};
+  Map<String, dynamic>? _savedCharity;
+  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  TabController get tabController => _tabController;
 
   @override
   void initState() {
     super.initState();
     _initializeServices();
-    _loadDonatedActivities();
-    _loadActivityRates();
-    _loadRunSettings();
-    
-    // Schedule to update home screen stats after this widget is fully initialized
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _updateHomeScreenStats();
-    });
-  }
-
-  Future<void> _initializeServices() async {
-    final prefs = await SharedPreferences.getInstance();
-    _stravaService = StravaService(prefs);
-    await _loadStravaActivities();
-  }
-
-  Future<void> _loadDonatedActivities() async {
-    final prefs = await SharedPreferences.getInstance();
-    final donatedIds = prefs.getStringList('donated_activity_ids') ?? [];
-    setState(() {
-      _donatedActivityIds = Set<String>.from(donatedIds);
-    });
-    _updateDonatedActivities();
-  }
-
-  Future<void> _loadActivityRates() async {
-    final prefs = await SharedPreferences.getInstance();
-    final rates = prefs.getString('activity_rates') ?? '{}';
-    _activityRates = Map<String, int>.from(
-      Map<String, dynamic>.from(json.decode(rates))
-        .map((key, value) => MapEntry(key, value as int))
+    _tabController = TabController(
+      length: 2,
+      vsync: this,
+      initialIndex: widget.initialTabIndex,
     );
-    RunTrackingScreen.activityRates = _activityRates;
+    RunTrackingScreen.currentState = this;
+    _loadSavedRuns();
+    _loadSelectedCharity();
   }
 
-  void _updateDonatedActivities() {
-    final donatedActivities = _activities.where((activity) => 
-      _donatedActivityIds.contains(activity['id'].toString())).toList();
-    RunTrackingScreen.donatedActivities = donatedActivities;
-    if (RunTrackingScreen.onActivitiesUpdated != null) {
-      RunTrackingScreen.onActivitiesUpdated!();
-    }
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
-  Future<void> _saveActivityRate(String activityId, int rate) async {
-    final prefs = await SharedPreferences.getInstance();
-    _activityRates[activityId] = rate;
-    await prefs.setString('activity_rates', json.encode(_activityRates));
-  }
-
-  void _updateHomeScreenStats() {
-    if (widget.onStatsUpdated != null) {
-      double totalDonations = 0;
-      double totalDistance = 0;
-      
-      for (var activity in _donatedActivities) {
-        final bool isActivityMetric = activity['is_metric'] != null ? activity['is_metric'] as bool : true;
-        final conversionFactor = isActivityMetric ? 1000.0 : 1609.34;
-        final distance = (activity['distance'] as num).toDouble() / conversionFactor;
-        final activityId = activity['id'].toString();
-        final rate = _activityRates[activityId] ?? 10;
-        
-        // Always convert distance to kilometers for the home screen total
-        final distanceInKm = isActivityMetric ? distance : distance * 1.60934;
-        
-        totalDonations += distance * rate;
-        totalDistance += distanceInKm;
-      }
-      
-      widget.onStatsUpdated!(totalDonations, totalDistance);
-    }
-  }
-
-  Future<void> _markActivityAsDonated(String activityId, int rate) async {
-    final prefs = await SharedPreferences.getInstance();
-    final donatedIds = prefs.getStringList('donated_activity_ids') ?? [];
-    
-    if (!donatedIds.contains(activityId)) {
-      donatedIds.add(activityId);
-      await prefs.setStringList('donated_activity_ids', donatedIds);
-      await _saveActivityRate(activityId, rate);
-    }
-    
-    setState(() {
-      _donatedActivityIds.add(activityId);
-      _activityRates[activityId] = rate;
-    });
-    
-    _updateHomeScreenStats();
-    _updateDonatedActivities();
-  }
-
-  Future<void> _loadStravaActivities() async {
-    try {
-      setState(() {
-        _isLoading = true;
-      });
-      
-      final isAuthenticated = await _stravaService.isAuthenticated;
-      
-      // Initialize with an empty list instead of sample activities
-      setState(() {
-        _activities = [];
-        _isLoading = false;
-      });
-
-      // Load donated activities and rates
-      await _loadDonatedActivities();
-      await _loadActivityRates();
-      
-      // Update home screen stats
-      _updateHomeScreenStats();
-    } catch (e) {
-      print('Error loading Strava activities: $e');
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  Future<Map<String, dynamic>?> _getLatestStravaActivity() async {
-    try {
-      // In a real app, this would fetch the latest activity from Strava API
-      // For demo purposes, we'll use a sample activity
-      final latestActivity = {
-        'id': DateTime.now().millisecondsSinceEpoch.toString(),
-        'name': 'Recent Run ${DateTime.now().day}/${DateTime.now().month}',
-        'distance': _isMetric ? 5000.0 : 3000.0, // 5 km or ~1.86 miles
-        'moving_time': 1800, // 30 minutes
-        'start_date': DateTime.now().toIso8601String(),
-        'is_metric': _isMetric, // Store the user's metric preference
-      };
-      
-      return latestActivity;
-    } catch (e) {
-      print('Error getting latest Strava activity: $e');
-      return null;
-    }
-  }
-
-  Future<void> _syncLatestRun() async {
-    setState(() {
-      _isLoading = true;
-    });
-
-    try {
-      // Get only the latest activity from Strava
-      final latestActivity = await _getLatestStravaActivity();
-      
-      if (latestActivity != null) {
-        final distance = _isMetric 
-          ? (latestActivity['distance'] as num).toDouble() / 1000  // Convert to km
-          : (latestActivity['distance'] as num).toDouble() / 1609.34; // Convert to miles
-        
-        // Show confirmation dialog
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Run Completed'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Distance: ${distance.toStringAsFixed(2)} ${_isMetric ? 'km' : 'miles'}'),
-                const SizedBox(height: 8),
-                Text('Rate: \$${_ratePerUnit.toStringAsFixed(2)} per ${_isMetric ? 'km' : 'mile'}'),
-                const SizedBox(height: 8),
-                Text(
-                  'Total Donation: \$${(distance * _ratePerUnit).toStringAsFixed(2)}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-              ],
-            ),
-            actions: [
-              TextButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  setState(() {
-                    _hasActiveRun = false;
-                  });
-                  _saveRunSettings();
-                },
-                child: const Text('Cancel'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  Navigator.pop(context);
-                  // Add this activity to our activities list
-                  setState(() {
-                    _activities.insert(0, latestActivity);
-                    _hasActiveRun = false;
-                  });
-                  _saveRunSettings();
-                  
-                  // Navigate to payment screen without marking as donated yet
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => PaymentConfirmationScreen(
-                        activity: latestActivity,
-                        onPaymentComplete: (selectedRate) {
-                          // Mark as donated with the selected rate after payment
-                          _markActivityAsDonated(latestActivity['id'].toString(), selectedRate);
-                          setState(() {});
-                          _updateHomeScreenStats();
-                        },
-                        isMetric: _isMetric,
-                        preSelectedRate: _ratePerUnit,
-                      ),
-                    ),
-                  );
-                },
-                child: const Text('Proceed to Payment'),
-              ),
-            ],
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('No recent activities found on Strava'),
-          ),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error syncing with Strava'),
-        ),
-      );
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-    }
-  }
-
-  String _formatDate(String isoDate) {
-    final date = DateTime.parse(isoDate);
-    return '${date.day}/${date.month}/${date.year}';
-  }
-
-  String _formatDuration(int seconds) {
-    final duration = Duration(seconds: seconds);
-    return '${duration.inHours}h ${duration.inMinutes.remainder(60)}m';
-  }
-
-  List<Map<String, dynamic>> get _donatedActivities {
-    return _activities.where((activity) => 
-      _donatedActivityIds.contains(activity['id'].toString())).toList();
-  }
-  
-  List<Map<String, dynamic>> get _notDonatedActivities {
-    return _activities.where((activity) => 
-      !_donatedActivityIds.contains(activity['id'].toString())).toList();
-  }
-
-  Widget _buildActivityCard(Map<String, dynamic> activity, bool isDonated) {
-    final activityId = activity['id'].toString();
-    final bool isActivityMetric = activity['is_metric'] != null ? activity['is_metric'] as bool : _isMetric;
-    final conversionFactor = isActivityMetric ? 1000.0 : 1609.34;
-    final distance = (activity['distance'] as num).toDouble() / conversionFactor;
-    final duration = activity['moving_time'] as int;
-    final date = activity['start_date'] as String;
-    final name = activity['name'] as String;
-    final rate = _activityRates[activityId] ?? 10; // Default to $10 if not found
-    final String unitName = isActivityMetric ? 'km' : 'mi';
-    
-    return Card(
-      margin: const EdgeInsets.only(bottom: 12),
-      elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: Column(
           children: [
             Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppColors.lightBlue,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.directions_run,
-                color: AppColors.primaryBlue,
-                size: 24,
-              ),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    name,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textBlack,
+                  ElevatedButton(
+                    onPressed: _startNewRun,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(30),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(Icons.directions_run, size: 24),
+                        SizedBox(width: 8),
+                        Text(
+                          'Start Run',
+                          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${_formatDate(date)} • ${distance.toStringAsFixed(1)} $unitName • ${_formatDuration(duration)}',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: AppColors.textGrey,
-                    ),
+            Row(
+              children: [
+                      IconButton(
+                        icon: Icon(
+                          Icons.bug_report,
+                          color: RunTrackingScreen.isDevMode ? Colors.amber : Colors.grey,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            RunTrackingScreen.isDevMode = !RunTrackingScreen.isDevMode;
+                          });
+                        },
+                        tooltip: RunTrackingScreen.isDevMode ? 'Development Mode On' : 'Development Mode Off',
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.refresh),
+                        onPressed: _isRefreshing ? null : _refreshActivities,
+                        tooltip: 'Refresh Activities',
+                      ),
+                    ],
                   ),
                 ],
               ),
             ),
-            isDonated 
-              ? Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text(
-                      '\$${(distance * rate).toStringAsFixed(2)}',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.primaryBlue,
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '\$$rate/$unitName',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.grey,
-                      ),
-                    ),
-                  ],
-                )
-              : ElevatedButton(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) => PaymentConfirmationScreen(
-                          activity: activity,
-                          onPaymentComplete: (selectedRate) {
-                            _markActivityAsDonated(activityId, selectedRate);
-                          },
-                          isMetric: isActivityMetric, // Use the activity's metric setting
-                          preSelectedRate: 10.0, // Default rate for older activities
-                        ),
-                      ),
-                    );
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.primaryBlue,
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  ),
-                  child: const Text('Donate'),
-                ),
+            _buildTabBar(),
+            Expanded(
+              child: TabBarView(
+                controller: _tabController,
+                children: [
+                  _buildNotDonatedTab(),
+                  _buildDonatedTab(),
+                ],
+              ),
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildEmptyState(String message) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.directions_run,
-            size: 64,
-            color: Colors.grey[400],
-          ),
-          const SizedBox(height: 16),
-          Text(
-            message,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: Colors.grey[600],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            'Connect with Strava to import your activities',
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey[500],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSegmentedControl() {
+  Widget _buildTabBar() {
     return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16.0),
       decoration: BoxDecoration(
-        color: Colors.grey[200],
-        borderRadius: BorderRadius.circular(8.0),
+        border: Border(
+          bottom: BorderSide(color: Colors.grey[300]!, width: 1),
+        ),
       ),
-      child: Row(
-        children: [
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _selectedIndex = 0;
-                });
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: _selectedIndex == 0 ? AppColors.primaryBlue : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-                child: Text(
-                  'Not Donated',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: _selectedIndex == 0 ? Colors.white : Colors.black,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            child: GestureDetector(
-              onTap: () {
-                setState(() {
-                  _selectedIndex = 1;
-                });
-              },
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                decoration: BoxDecoration(
-                  color: _selectedIndex == 1 ? AppColors.primaryBlue : Colors.transparent,
-                  borderRadius: BorderRadius.circular(8.0),
-                ),
-                child: Text(
-                  'Donated',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: _selectedIndex == 1 ? Colors.white : Colors.black,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-            ),
-          ),
+      child: TabBar(
+        controller: _tabController,
+        tabs: const [
+          Tab(text: 'Not Donated'),
+          Tab(text: 'Donated'),
         ],
+        labelStyle: const TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+        ),
+        unselectedLabelStyle: const TextStyle(
+          fontSize: 16,
+        ),
+        indicatorWeight: 3,
       ),
     );
   }
 
-  Future<void> _startNewRun() async {
-    final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => RunIntentionScreen(
-          onIntentionSet: (isMetric, ratePerUnit) {
-            setState(() {
-              _hasActiveRun = true;
-              _isMetric = isMetric;
-              _ratePerUnit = ratePerUnit;
-            });
-            _saveRunSettings();
-          },
+  Widget _buildNotDonatedTab() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    final notDonatedActivities = _activities.where((activity) {
+      return !RunTrackingScreen.donatedActivities
+          .any((donated) => donated['id'] == activity['id']);
+    }).toList();
+
+    if (notDonatedActivities.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: const [
+            Icon(Icons.directions_run_outlined, size: 64, color: Colors.grey),
+            SizedBox(height: 16),
+            Text(
+              'No runs available for donation',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: notDonatedActivities.length,
+      itemBuilder: (context, index) {
+        final activity = notDonatedActivities[index];
+        return _buildActivityCard(activity);
+      },
+    );
+  }
+
+  Widget _buildDonatedTab() {
+    if (RunTrackingScreen.donatedActivities.isEmpty) {
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: const [
+            Icon(Icons.volunteer_activism_outlined, size: 64, color: Colors.grey),
+            SizedBox(height: 16),
+            Text(
+              'No donated runs yet',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+          ),
+        ],
+      ),
+    );
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: RunTrackingScreen.donatedActivities.length,
+      itemBuilder: (context, index) {
+        final activity = RunTrackingScreen.donatedActivities[index];
+        return _buildDonatedActivityCard(activity);
+      },
+    );
+  }
+
+  Widget _buildActivityCard(Map<String, dynamic> activity) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: InkWell(
+        onTap: () => _showRunDetailsDialog(activity),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                    _formatDate(activity['start_date']),
+                    style: const TextStyle(
+                        fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => _showDonationDialog(activity),
+                    child: const Text('Donate'),
+                      ),
+                  ],
+                ),
+              const SizedBox(height: 8),
+              Text(
+                'Distance: ${_formatDistance(activity['distance'])}',
+                style: const TextStyle(fontSize: 14),
+              ),
+              Text(
+                'Duration: ${_formatDuration(activity['moving_time'])}',
+                style: const TextStyle(fontSize: 14),
+                ),
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Future<void> _saveRunSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('has_active_run', _hasActiveRun);
-    await prefs.setBool('is_metric', _isMetric);
-    await prefs.setDouble('rate_per_unit', _ratePerUnit);
-  }
-
-  Future<void> _loadRunSettings() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _hasActiveRun = prefs.getBool('has_active_run') ?? false;
-      _isMetric = prefs.getBool('is_metric') ?? true;
-      _ratePerUnit = prefs.getDouble('rate_per_unit') ?? 10.0;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const Text('Your Runs'),
-        backgroundColor: AppColors.primaryBlue,
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                if (!_hasActiveRun) ...[
-                  // Start new run button
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: _startNewRun,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primaryBlue,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          'Start New Run',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.white,
-                          ),
-                        ),
-                      ),
+  Widget _buildDonatedActivityCard(Map<String, dynamic> activity) {
+    final donationDate = DateTime.parse(activity['donation_date']);
+    final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+    final donationAmount = (activity['donation_amount'] as double).toStringAsFixed(2);
+    final totalImpact = (double.parse(donationAmount) * 2).toStringAsFixed(2);
+    
+    return Card(
+      margin: const EdgeInsets.only(bottom: 16),
+      child: InkWell(
+        onTap: () => _showDonationDetailsDialog(activity),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+                    _formatDate(activity['start_date']),
+                    style: const TextStyle(
+                      fontSize: 16,
+                fontWeight: FontWeight.bold,
                     ),
                   ),
-                ] else ...[
-                  // Active run status
                   Container(
-                    margin: const EdgeInsets.all(16),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppColors.lightBlue,
-                      borderRadius: BorderRadius.circular(12),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
                     ),
-                    child: Column(
-                      children: [
-                        Text(
-                          'Active Run in Progress',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.deepBlue,
-                          ),
+                    decoration: BoxDecoration(
+                      color: Colors.green[100],
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                  children: [
+                        Icon(
+                          Icons.volunteer_activism,
+                          size: 16,
+                          color: Colors.green[700],
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Rate: \$${_ratePerUnit.toStringAsFixed(2)} per ${_isMetric ? 'kilometer' : 'mile'}',
-                          style: TextStyle(
-                            color: AppColors.textGrey,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton(
-                            onPressed: _syncLatestRun,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.primaryBlue,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                            ),
-                            child: const Text('Sync Latest Run from Strava'),
+                        const SizedBox(width: 4),
+                    Text(
+                          '${currencyProvider.currencySymbol}$totalImpact',
+                      style: TextStyle(
+                            color: Colors.green[700],
+                        fontWeight: FontWeight.bold,
                           ),
                         ),
                       ],
                     ),
                   ),
                 ],
-                // Existing activity list
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-                  child: Text(
-                    'Previous Activities',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.deepBlue,
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Distance: ${_formatDistance(activity['distance'])}',
+                style: const TextStyle(fontSize: 14),
+              ),
+              Text(
+                'Donated on ${DateFormat('MMM d, y').format(donationDate)}',
+                style: const TextStyle(fontSize: 14, color: Colors.grey),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                      children: [
+                  Icon(
+                    Icons.touch_app,
+                    size: 14,
+                    color: Colors.grey[400],
+                  ),
+                  const SizedBox(width: 4),
+                        Text(
+                    'Tap to see donation details',
+                          style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.grey[400],
+                      fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+    );
+  }
+
+  String _formatDate(String dateString) {
+    final date = DateTime.parse(dateString);
+    return DateFormat('EEEE, MMM d, y').format(date);
+  }
+
+  String _formatDistance(double distance) {
+    if (_isMetric) {
+      return '${(distance / 1000).toStringAsFixed(2)} km';
+    } else {
+      return '${(distance / 1609.34).toStringAsFixed(2)} miles';
+    }
+  }
+
+  String _formatDuration(int seconds) {
+    final duration = Duration(seconds: seconds);
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final secs = duration.inSeconds.remainder(60);
+    
+    if (hours > 0) {
+      return '${hours}h ${minutes}m ${secs}s';
+    } else {
+      return '${minutes}m ${secs}s';
+    }
+  }
+
+  Future<void> _startNewRun() async {
+    // Check if a charity is selected
+    if (_savedCharity == null) {
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Select a Charity'),
+          content: const Text('Please select a charity before starting a run.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+              },
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                // Navigate to Charities screen
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => CharitiesScreen(
+                      onCharitySelected: (charity) async {
+                        setState(() {
+                          _savedCharity = charity;
+                        });
+                        // Save the selected charity
+                        final prefs = await SharedPreferences.getInstance();
+                        await prefs.setString('selectedCharity', charity['name']);
+                        // Start the run after selecting charity
+                        _continueStartRun();
+                      },
+                      onTabChange: (index) {},
                     ),
                   ),
+                );
+              },
+              child: const Text('Select Charity'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    _continueStartRun();
+  }
+
+  Future<void> _continueStartRun() async {
+    if (RunTrackingScreen.isDevMode) {
+      final rate = await Navigator.push<double>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const RunIntentionScreen(),
+        ),
+      );
+
+      if (rate != null) {
+        setState(() {
+          _selectedRate = rate;
+          RunTrackingScreen.lastRunStartTime = DateTime.now();
+        });
+        _showRunDetectedDialog(_generateTestActivity());
+      }
+      return;
+    }
+
+    if (!(await _stravaService.isAuthenticated)) {
+      _showStravaAuthDialog();
+      return;
+    }
+
+    final rate = await Navigator.push<double>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const RunIntentionScreen(),
+      ),
+    );
+
+    if (rate != null) {
+      setState(() {
+        _selectedRate = rate;
+        RunTrackingScreen.lastRunStartTime = DateTime.now();
+      });
+    }
+  }
+
+  Map<String, dynamic> _generateTestActivity() {
+    final random = Random();
+    final now = DateTime.now();
+    
+    // Generate random distance between 2-10 km (in meters)
+    final distance = (random.nextDouble() * 8000 + 2000);
+    
+    // Generate random duration between 15-60 minutes (in seconds)
+    final duration = random.nextInt(2700) + 900;
+    
+    // Calculate average speed (meters per second)
+    final averageSpeed = distance / duration;
+
+    return {
+      'id': 'test_${now.millisecondsSinceEpoch}',
+      'name': 'Test Run',
+      'distance': distance,
+      'moving_time': duration,
+      'average_speed': averageSpeed,
+      'start_date': now.toIso8601String(),
+      'type': 'Run'
+    };
+  }
+
+  Future<void> _refreshActivities() async {
+    if (_isRefreshing) return;
+
+    setState(() {
+      _isRefreshing = true;
+    });
+
+    try {
+      final activities = await _stravaService.getRecentActivities();
+      setState(() {
+        _activities = activities;
+      });
+
+      if (RunTrackingScreen.lastRunStartTime != null) {
+        final newRuns = activities.where((activity) {
+          final activityDate = DateTime.parse(activity['start_date']);
+          return activityDate.isAfter(RunTrackingScreen.lastRunStartTime!);
+        }).toList();
+
+        if (newRuns.isNotEmpty) {
+          _showRunDetectedDialog(newRuns.first);
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to fetch activities: $e')),
+      );
+    } finally {
+      setState(() {
+        _isRefreshing = false;
+      });
+    }
+  }
+
+  void _showStravaAuthDialog() {
+                    showDialog(
+                      context: context,
+                      builder: (context) => AlertDialog(
+        title: const Text('Connect with Strava'),
+        content: const Text('You need to connect with Strava to start a new run.'),
+                        actions: [
+                          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              try {
+                await _stravaService.authenticate();
+                _startNewRun();
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to authenticate: $e')),
+                );
+              }
+            },
+            child: const Text('Connect'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRunDetectedDialog(Map<String, dynamic> activity) {
+    final distance = activity['distance'] as double;
+    final metricProvider = Provider.of<MetricProvider>(context, listen: false);
+    final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+    final isMetric = metricProvider.isMetric;
+    
+    // Update _isMetric state to match provider
+    setState(() {
+      _isMetric = isMetric;
+    });
+    
+    final donationAmount = isMetric
+        ? (distance / 1000) * _selectedRate
+        : (distance / 1609.34) * _selectedRate;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Column(
+          children: [
+            const Icon(
+              Icons.directions_run,
+              size: 48,
+              color: Colors.blue,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Great Run!',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Colors.blue,
+              ),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+            Card(
+                elevation: 2,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                      Text(
+                        'Run Details',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                          color: Colors.grey[800],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Text(
+                        'Date: ${_formatDate(activity['start_date'])}',
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Distance: ${_formatDistance(distance)}',
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Duration: ${_formatDuration(activity['moving_time'])}',
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ],
+                            ),
+                          ),
+                        ),
+              const SizedBox(height: 20),
+              Container(
+                padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                  color: Colors.green[50],
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.green[100]!),
                 ),
-                const SizedBox(height: 16),
-                _buildSegmentedControl(),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: _selectedIndex == 0
-                      ? _notDonatedActivities.isEmpty
-                          ? _buildEmptyState('No runs to donate')
-                          : ListView.builder(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                              itemCount: _notDonatedActivities.length,
-                              itemBuilder: (context, index) {
-                                return _buildActivityCard(_notDonatedActivities[index], false);
-                              },
-                            )
-                      : _donatedActivities.isEmpty
-                          ? _buildEmptyState('No donated runs yet')
-                          : ListView.builder(
-                              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                              itemCount: _donatedActivities.length,
-                              itemBuilder: (context, index) {
-                                return _buildActivityCard(_donatedActivities[index], true);
-                              },
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.volunteer_activism, color: Colors.green[700]),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Your Impact',
+                                style: TextStyle(
+                            fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                            color: Colors.grey[800],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Your donation:'),
+                        Text(
+                          '${currencyProvider.currencySymbol}${donationAmount.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('FundRacer match:'),
+                        Text(
+                          '${currencyProvider.currencySymbol}${donationAmount.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Divider(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                          'Total Impact:',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                        Text(
+                          '${currencyProvider.currencySymbol}${(donationAmount * 2).toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.green[700],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Later'),
+          ),
+          ElevatedButton(
+                onPressed: () {
+                  Navigator.pop(context);
+              _navigateToPayment(activity, donationAmount);
+                },
+                style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+                child: const Text(
+              'Proceed to Payment',
+              style: TextStyle(fontSize: 16),
+              ),
+            ),
+          ],
+      ),
+    );
+  }
+
+  Future<void> _navigateToPayment(
+    Map<String, dynamic> activity,
+    double donationAmount,
+  ) async {
+    final result = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => PaymentScreen(
+          key: Key('payment_${activity['id']}'),
+          activity: activity,
+          donationAmount: donationAmount,
+          selectedRate: _selectedRate,
+          onPaymentComplete: widget.onPaymentComplete,
+        ),
+      ),
+    );
+
+    if (result == true) {
+      _showThankYouDialog(activity, donationAmount);
+    }
+  }
+
+  Future<void> _loadSelectedCharity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final selectedCharityName = prefs.getString('selectedCharity');
+    if (selectedCharityName != null) {
+      final charity = CharitiesScreen.charities.firstWhere(
+        (charity) => charity['name'] == selectedCharityName,
+        orElse: () => CharitiesScreen.charities.first,
+      );
+      if (mounted) {
+        setState(() {
+          _savedCharity = charity;
+        });
+      }
+    }
+  }
+
+  void _showThankYouDialog(Map<String, dynamic> activity, double donationAmount) {
+    final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+    final totalImpact = donationAmount * 2;
+    
+    // Ensure we have the latest selected charity
+    _loadSelectedCharity();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        contentPadding: EdgeInsets.zero,
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                decoration: BoxDecoration(
+                  color: Colors.blue[50],
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blue.withOpacity(0.2),
+                            blurRadius: 10,
+                            spreadRadius: 2,
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.favorite,
+                        color: Colors.blue[700],
+                        size: 48,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Thank You!',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.black87,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: Column(
+                  children: [
+                    // Charity section
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey[200]!),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.blue[100],
+                              shape: BoxShape.circle,
+                            ),
+                            child: Icon(
+                              Icons.favorite,
+                              color: Colors.blue[700],
+                              size: 24,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text(
+                                  'Selected Charity',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: Colors.grey,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _savedCharity?['name'] ?? 'Loading...',
+                                  style: const TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Donation Impact section
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.green[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.green[100]!),
+                      ),
+                      child: Column(
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'Your donation:',
+                                style: TextStyle(
+                                  color: Colors.grey[700],
+                                  fontSize: 16,
+                                ),
+                              ),
+                              Text(
+                                '${currencyProvider.currencySymbol}${donationAmount.toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'FundRacer match:',
+                                style: TextStyle(
+                                  color: Colors.grey[700],
+                                  fontSize: 16,
+                                ),
+                              ),
+                              Text(
+                                '${currencyProvider.currencySymbol}${donationAmount.toStringAsFixed(2)}',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 8),
+                            child: Divider(),
+                          ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Total Impact:',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                '${currencyProvider.currencySymbol}${totalImpact.toStringAsFixed(2)}',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.green[700],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              
+              // Create the new activity entry
+              final newActivity = {
+                ...activity,
+                'donation_amount': donationAmount,
+                'donation_date': DateTime.now().toIso8601String(),
+                'charity': _savedCharity,
+              };
+              
+              // Add to the static list
+              setState(() {
+                RunTrackingScreen.donatedActivities.insert(0, newActivity);
+              });
+              
+              // Save to persistent storage
+              await _saveDonatedActivities();
+              
+              // Notify parent of the new donation
+              if (widget.onActivityDonated != null) {
+                widget.onActivityDonated!(activity, _selectedRate.toInt());
+              }
+              
+              // Force immediate refresh of stats and UI
+              if (widget.onPaymentComplete != null) {
+                widget.onPaymentComplete!();
+              }
+              
+              // Force tab refresh
+              setState(() {});
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.blue[700],
+            ),
+            child: const Text(
+              'Done',
+              style: TextStyle(fontSize: 16),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showRunDetailsDialog(Map<String, dynamic> activity) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Run Details'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Date: ${_formatDate(activity['start_date'])}'),
+            Text('Distance: ${_formatDistance(activity['distance'])}'),
+            Text('Duration: ${_formatDuration(activity['moving_time'])}'),
+            Text(
+              'Average Speed: ${_formatSpeed(activity['average_speed'])}',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatSpeed(double speed) {
+    if (_isMetric) {
+      return '${(speed * 3.6).toStringAsFixed(2)} km/h';
+    } else {
+      return '${(speed * 2.237).toStringAsFixed(2)} mph';
+    }
+  }
+
+  void _showDonationDetailsDialog(Map<String, dynamic> activity) {
+    final currencyProvider = Provider.of<CurrencyProvider>(context, listen: false);
+    final donationAmount = (activity['donation_amount'] as double).toStringAsFixed(2);
+    final donationDate = DateTime.parse(activity['donation_date']);
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        contentPadding: EdgeInsets.zero,
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+          children: [
+              // Header section
+            Container(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+              decoration: BoxDecoration(
+                  borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blue.withOpacity(0.2),
+                            blurRadius: 10,
+                            spreadRadius: 2,
+                          ),
+                        ],
+              ),
+              child: Icon(
+                        Icons.volunteer_activism,
+                        color: Colors.blue[700],
+                        size: 48,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  Text(
+                      'Donation Details',
+                    style: TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue[900],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+              
+              // Content section
+              Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  children: [
+                    // Run Details Card
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey[200]!),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.directions_run, color: Colors.blue[700]),
+                              const SizedBox(width: 8),
+                    Text(
+                                'Run Information',
+                      style: TextStyle(
+                                  fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                                  color: Colors.grey[800],
+                      ),
+                    ),
+                  ],
+                          ),
+                          const SizedBox(height: 16),
+                          _buildDetailRow(
+                            Icons.calendar_today,
+                            'Date',
+                            _formatDate(activity['start_date']),
+                          ),
+                          const SizedBox(height: 12),
+                          _buildDetailRow(
+                            Icons.straighten,
+                            'Distance',
+                            _formatDistance(activity['distance']),
+                          ),
+                          const SizedBox(height: 12),
+                          _buildDetailRow(
+                            Icons.timer,
+                            'Duration',
+                            _formatDuration(activity['moving_time']),
+                ),
+          ],
+        ),
+      ),
+                    const SizedBox(height: 24),
+                    
+                    // Donation Impact Card
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.blue[50],
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.blue[100]!),
+                      ),
+      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+                          Row(
+                            children: [
+                              Icon(Icons.favorite, color: Colors.blue[700]),
+                              const SizedBox(width: 8),
+          Text(
+                                'Your Impact',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+                                  color: Colors.grey[800],
+            ),
+          ),
+        ],
+      ),
+                          const SizedBox(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+                              Text(
+                                'Your Donation',
+                  style: TextStyle(
+                                  color: Colors.grey[700],
+                                  fontSize: 16,
+                                ),
+                              ),
+                              Text(
+                                '${currencyProvider.currencySymbol}$donationAmount',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                'FundRacer Match',
+                  style: TextStyle(
+                                  color: Colors.grey[700],
+                                  fontSize: 16,
+                                ),
+                              ),
+                              Text(
+                                '${currencyProvider.currencySymbol}$donationAmount',
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 16,
+            ),
+          ),
+        ],
+      ),
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            child: Divider(),
+                          ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                              const Text(
+                                'Total Impact',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              Text(
+                                '${currencyProvider.currencySymbol}${(double.parse(donationAmount) * 2).toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                                  color: Colors.blue[700],
+                          ),
+                        ),
+                            ],
+                      ),
+                        ],
+                    ),
+                  ),
+                    const SizedBox(height: 16),
+                    
+                    // Donation Date
+                  Container(
+                      padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                        color: Colors.grey[100],
+                        borderRadius: BorderRadius.circular(8),
+                    ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                          Icon(Icons.access_time, size: 16, color: Colors.grey[600]),
+                          const SizedBox(width: 8),
+                        Text(
+                            'Donated on ${DateFormat('MMMM d, y').format(donationDate)}',
+                          style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                          ),
+                        ),
+                      ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.blue[700],
+            ),
+            child: const Text(
+              'Close',
+              style: TextStyle(fontSize: 16),
+                    ),
+                  ),
+                ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 16, color: Colors.grey[600]),
+        const SizedBox(width: 8),
+        Text(
+          '$label: ',
+                    style: TextStyle(
+            color: Colors.grey[600],
+            fontSize: 14,
+          ),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            fontWeight: FontWeight.bold,
+            fontSize: 14,
                             ),
                 ),
               ],
-            ),
     );
+  }
+
+  Future<void> _initializeServices() async {
+    final prefs = await SharedPreferences.getInstance();
+    _stravaService = StravaService(prefs);
+    _isMetric = Provider.of<MetricProvider>(context, listen: false).isMetric;
+  }
+
+  Future<void> _fetchActivities() async {
+    try {
+      final activities = await _stravaService.getRecentActivities();
+      setState(() {
+        _activities = activities;
+        _isLoading = false;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to fetch activities: $e')),
+      );
+    }
+  }
+
+  Future<void> _showDonationDialog(Map<String, dynamic> activity) async {
+    // TODO: Implement donation dialog
+  }
+
+  Future<void> _loadSavedRuns() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final donatedRunsDoc = await _firestore
+          .collection('users')
+          .doc(user.uid)
+          .collection('donated_runs')
+          .orderBy('donation_date', descending: true)
+          .get();
+
+      final runs = donatedRunsDoc.docs.map((doc) => doc.data()).toList();
+      
+      if (mounted) {
+        setState(() {
+          RunTrackingScreen.donatedActivities = runs;
+        });
+      }
+    } catch (e) {
+      print('Error loading saved runs: $e');
+    }
+  }
+
+  Future<void> _saveDonatedActivities() async {
+    final prefs = await SharedPreferences.getInstance();
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    // Sort activities by date (most recent first)
+    RunTrackingScreen.donatedActivities.sort((a, b) {
+      final dateA = DateTime.parse(a['donation_date']);
+      final dateB = DateTime.parse(b['donation_date']);
+      return dateB.compareTo(dateA);
+    });
+
+    final String userKey = 'user_${user.uid}';
+    final String activitiesJson = json.encode(RunTrackingScreen.donatedActivities);
+    await prefs.setString('${userKey}_donated_activities', activitiesJson);
+
+    // Update total stats
+    double totalDonations = 0;
+    double totalDistance = 0;
+
+    for (var activity in RunTrackingScreen.donatedActivities) {
+      totalDonations += activity['donation_amount'] as double;
+      totalDistance += (activity['distance'] as num).toDouble() / 1000; // Convert to km
+    }
+
+    await prefs.setDouble('${userKey}_total_donated', totalDonations);
+    await prefs.setDouble('${userKey}_total_distance', totalDistance);
+
+    // Notify listeners of updated stats
+    if (RunTrackingScreen.onStatsUpdated != null) {
+      RunTrackingScreen.onStatsUpdated!(totalDonations, totalDistance);
+    }
+
+    // Force HomeScreen to refresh its state if it's mounted
+    if (widget.onPaymentComplete != null) {
+      widget.onPaymentComplete!();
+    }
   }
 } 

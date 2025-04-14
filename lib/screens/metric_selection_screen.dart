@@ -1,44 +1,102 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:provider/provider.dart';
+import '../providers/metric_provider.dart';
 import '../main.dart';
+import 'notification_permission_screen.dart';
 import 'connect_health_screen.dart';
-import 'user_details_screen.dart';
-import 'country_selection_screen.dart';
 
-class GenderSelectionScreen extends StatefulWidget {
-  const GenderSelectionScreen({super.key});
+class MetricSelectionScreen extends StatefulWidget {
+  const MetricSelectionScreen({super.key});
 
   @override
-  State<GenderSelectionScreen> createState() => _GenderSelectionScreenState();
+  State<MetricSelectionScreen> createState() => _MetricSelectionScreenState();
 }
 
-class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
-  String? _selectedGender;
+class _MetricSelectionScreenState extends State<MetricSelectionScreen> {
+  String? _selectedMetric;
+  bool _stravaMetricChecked = false;
 
-  final List<Map<String, dynamic>> genderOptions = [
+  final List<Map<String, dynamic>> metricOptions = [
     {
-      'text': 'Female',
-      'icon': Icons.female_rounded,
-      'description': 'I identify as female',
+      'text': 'Kilometers',
+      'icon': Icons.straighten_rounded,
+      'description': 'Use kilometers for distance tracking',
+      'value': 'km'
     },
     {
-      'text': 'Male',
-      'icon': Icons.male_rounded,
-      'description': 'I identify as male',
-    },
-    {
-      'text': 'Non-binary',
-      'icon': Icons.transgender_rounded,
-      'description': 'I identify as non-binary',
-    },
-    {
-      'text': 'Prefer not to say',
-      'icon': Icons.not_interested_rounded,
-      'description': 'I\'d rather not answer',
+      'text': 'Miles',
+      'icon': Icons.speed_rounded,
+      'description': 'Use miles for distance tracking',
+      'value': 'mi'
     },
   ];
 
-  bool get canContinue => _selectedGender != null;
+  bool get canContinue => _selectedMetric != null;
+
+  Future<void> _checkStravaMetric() async {
+    if (!_stravaMetricChecked && _selectedMetric != null) {
+      // TODO: Implement actual Strava metric check
+      // For now, we'll simulate that Strava uses kilometers
+      const stravaUsesMetric = true; // This should come from Strava API
+      final selectedIsMetric = _selectedMetric == 'km';
+
+      if (stravaUsesMetric != selectedIsMetric) {
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Metric Mismatch'),
+            content: Text(
+              'Your selected metric (${_selectedMetric == 'km' ? 'kilometers' : 'miles'}) '
+              'does not match with your Strava settings '
+              '(${stravaUsesMetric ? 'kilometers' : 'miles'}). '
+              'Are you sure you want to proceed?'
+            ),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(15),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(
+                  'Change Selection',
+                  style: TextStyle(color: AppColors.textGrey),
+                ),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryBlue,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+                child: const Text('Proceed Anyway'),
+              ),
+            ],
+          ),
+        );
+
+        if (proceed != true) {
+          return;
+        }
+      }
+    }
+    _stravaMetricChecked = true;
+
+    // Save metric preference using the provider
+    await Provider.of<MetricProvider>(context, listen: false).setMetric(_selectedMetric!);
+
+    if (mounted) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => const NotificationPermissionScreen(),
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -51,7 +109,10 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
           icon: const Icon(Icons.arrow_back),
           color: AppColors.textBlack,
           onPressed: () {
-            Navigator.pop(context);
+            Navigator.pushReplacement(
+              context,
+              MaterialPageRoute(builder: (context) => const ConnectHealthScreen()),
+            );
           },
         ),
       ),
@@ -84,7 +145,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'How do you\nidentify yourself?',
+                          'Choose your\npreferred metric',
                           style: TextStyle(
                             fontSize: 28,
                             fontWeight: FontWeight.bold,
@@ -94,7 +155,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Select the option that best describes you',
+                          'Select how you want to measure your distances',
                           style: TextStyle(
                             fontSize: 16,
                             color: AppColors.textGrey,
@@ -111,12 +172,13 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Column(
-                  children: genderOptions.map((gender) {
-                    final isSelected = _selectedGender == gender['text'];
+                  children: metricOptions.map((metric) {
+                    final isSelected = _selectedMetric == metric['value'];
                     return GestureDetector(
                       onTap: () {
                         setState(() {
-                          _selectedGender = gender['text'];
+                          _selectedMetric = metric['value'];
+                          _stravaMetricChecked = false;
                         });
                       },
                       child: Container(
@@ -150,7 +212,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                                 borderRadius: BorderRadius.circular(12),
                               ),
                               child: Icon(
-                                gender['icon'],
+                                metric['icon'],
                                 size: 28,
                                 color: isSelected
                                     ? AppColors.primaryBlue
@@ -163,7 +225,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
-                                    gender['text'],
+                                    metric['text'],
                                     style: TextStyle(
                                       fontSize: 16,
                                       color: AppColors.textBlack,
@@ -172,7 +234,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    gender['description'],
+                                    metric['description'],
                                     style: TextStyle(
                                       fontSize: 14,
                                       color: AppColors.textGrey,
@@ -233,16 +295,7 @@ class _GenderSelectionScreenState extends State<GenderSelectionScreen> {
                   ],
                 ),
                 child: ElevatedButton(
-                  onPressed: canContinue
-                      ? () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => const CountrySelectionScreen(),
-                            ),
-                          );
-                        }
-                      : null,
+                  onPressed: canContinue ? _checkStravaMetric : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.transparent,
                     shadowColor: Colors.transparent,

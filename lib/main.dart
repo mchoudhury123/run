@@ -4,6 +4,9 @@ import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/otp_verification_screen.dart';
+import 'package:provider/provider.dart';
+import 'providers/currency_provider.dart';
+import 'providers/metric_provider.dart';
 
 // Define app colors
 class AppColors {
@@ -47,7 +50,15 @@ void main() async {
   }
   
   print('Running app...');
-  runApp(const MyApp());
+  runApp(
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => CurrencyProvider()),
+        ChangeNotifierProvider(create: (_) => MetricProvider()),
+      ],
+      child: const MyApp(),
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
@@ -57,6 +68,13 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     print('Building MyApp widget');
+    
+    // Load saved currency and metric preferences when app starts
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Provider.of<CurrencyProvider>(context, listen: false).loadSavedCurrency();
+      Provider.of<MetricProvider>(context, listen: false).loadSavedMetric();
+    });
+    
     return MaterialApp(
       title: 'FundRacer',
       debugShowCheckedModeBanner: false,
@@ -73,16 +91,16 @@ class MyApp extends StatelessWidget {
         ),
         // Add Bottom Navigation Bar Theme
         bottomNavigationBarTheme: BottomNavigationBarThemeData(
-          backgroundColor: AppColors.primaryBlue,
-          selectedItemColor: AppColors.white,
-          unselectedItemColor: AppColors.white.withOpacity(0.6),
+          backgroundColor: Colors.white,
+          selectedItemColor: AppColors.primaryBlue,
+          unselectedItemColor: Colors.grey[400],
           selectedLabelStyle: const TextStyle(
             fontWeight: FontWeight.w600,
-            fontSize: 12,
+            fontSize: 14,
           ),
           unselectedLabelStyle: const TextStyle(
-            fontWeight: FontWeight.normal,
-            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            fontSize: 14,
           ),
           type: BottomNavigationBarType.fixed,
           elevation: 8,
